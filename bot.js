@@ -288,13 +288,10 @@ function welcomeMessage(ctx) {
 }
 
 function welcomeMarkup(ctx) {
-  const rows = [];
-  if (isOwner(ctx)) {
-    rows.push([
-      { text: '➕ Kanal qo\'shish', callback_data: 'welcome:required_add', style: 'primary' },
-      { text: '📋 Kanallar ro\'yxati', callback_data: 'welcome:required_list', style: 'success' }
-    ]);
-  }
+  const rows = [
+    [{ text: '➕ Kanal/guruh ulash', callback_data: 'welcome:join_chat_connect', style: 'primary' }],
+    [{ text: '📋 Ulangan kanallar ro\'yxati', callback_data: 'welcome:required_list', style: 'success' }]
+  ];
   const bottomRow = [{ text: '❓ Yordam', callback_data: 'help', style: 'success' }];
   if (isAdmin(ctx)) bottomRow.push({ text: '🛠 Admin panel', callback_data: 'admin:panel', style: 'success' });
   rows.push(bottomRow);
@@ -1645,16 +1642,17 @@ bot.action('welcome:required_add', async (ctx) => {
   return ctx.reply('Majburiy obuna kanalining public username sini yuboring, masalan: @my_channel');
 });
 
+bot.action('welcome:join_chat_connect', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (ctx.chat?.type !== 'private') {
+    return ctx.reply('Kanal yoki guruh ulash kodini olish uchun botning shaxsiy chatida ushbu tugmani bosing.');
+  }
+  return issueJoinRequestLinkCode(ctx);
+});
+
 bot.action('welcome:required_list', async (ctx) => {
   await ctx.answerCbQuery();
-  if (!isOwner(ctx)) return ctx.reply('Faqat asosiy admin bu amalni bajarishi mumkin.');
-  const channels = await getRequiredChannels();
-  const text = channels.length
-    ? channels.map((channel, index) => `${index + 1} - kanal: ${channel.title || channel.username}`).join('\n')
-    : 'Majburiy obuna kanallari yo\'q.';
-  return ctx.reply(text, Markup.inlineKeyboard([[
-    Markup.button.callback('➕ Kanal qo\'shish', 'welcome:required_add')
-  ]]));
+  return showJoinRequestChats(ctx);
 });
 
 bot.action('admin:required_list', async (ctx) => {
