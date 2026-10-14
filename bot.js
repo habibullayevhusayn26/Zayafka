@@ -1770,7 +1770,7 @@ bot.on('text', async (ctx) => {
   }
   if (value.startsWith('/')) {
     reset(ctx);
-    return ctx.reply(isAdmin(ctx) ? 'Bu command mavjud emas. Admin paneldan foydalaning.' : 'Bu command mavjud emas.');
+    return ctx.reply(isAdmin(ctx) ? 'Bu command mavjud emas.' : 'Bu command mavjud emas.');
   }
   if (/^(?:Admin panel|🛠 Admin panel)$/.test(value)) {
     if (!isAdmin(ctx)) return ctx.reply('Ruxsat yo\'q.');
