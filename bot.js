@@ -910,24 +910,7 @@ bot.action(/^join_chat:unlink:(-?\d+)$/, async (ctx) => {
 
 bot.action(/^join_request:approve:(-?\d+):(\d+):(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
-  const chatId = Number(ctx.match[1]);
-  const userId = Number(ctx.match[2]);
-  const page = Number(ctx.match[3]);
-  const chat = await isChatAdministrator(ctx, chatId);
-  if (!chat) return ctx.reply(chat === null ? 'Ulangan chat topilmadi.' : 'Bu chatni boshqarish uchun uning administratori bo\'lishingiz kerak.');
-
-  const pendingRequest = await PendingJoinRequest.findOne({ chatId, userId }).lean();
-  if (!pendingRequest) return ctx.reply('Bu so\'rov allaqachon ko\'rib chiqilgan yoki muddati tugagan.');
-
-  try {
-    await ctx.telegram.approveChatJoinRequest(chatId, userId);
-    await PendingJoinRequest.deleteOne({ chatId, userId });
-    return showJoinRequestQueue(ctx, chatId, page);
-  } catch (error) {
-    console.error(`Manual join request approval failed for ${chatId}/${userId}:`, error.response?.description || error.message);
-    await discardFailedJoinRequest(chatId, userId, 'manual approval');
-    return ctx.reply(`So\'rovni qabul qilib bo\'lmadi: ${error.response?.description || error.message}`);
-  }
+  return ctx.reply('So\'rovlar shaxsiy ma\'lumotlarsiz ko\'rsatiladi. Ularni ommaviy qabul qilish tugmasidan foydalaning.');
 });
 
 bot.action(/^join_chat:remove:(-?\d+)$/, async (ctx) => {
@@ -1218,28 +1201,15 @@ async function showJoinRequestChats(ctx) {
 async function showJoinRequestQueue(ctx, chatId, page = 0) {
   const chat = await isChatAdministrator(ctx, chatId);
   if (!chat) return ctx.reply(chat === null ? 'Ulangan chat topilmadi.' : 'Bu chatni boshqarish uchun uning administratori bo\'lishingiz kerak.');
-  const pageSize = 10;
-  const [total, requests] = await Promise.all([
-    PendingJoinRequest.countDocuments({ chatId }),
-    PendingJoinRequest.find({ chatId }).sort({ requestedAt: 1 }).skip(page * pageSize).limit(pageSize).lean()
-  ]);
+  const total = await PendingJoinRequest.countDocuments({ chatId });
   if (!total) return ctx.reply('Kutilayotgan qo\'shilish so\'rovlari yo\'q.', chatManagementKeyboard(chat, 0));
 
-  const rows = requests.map((request) => {
-    const name = [request.firstName, request.lastName].filter(Boolean).join(' ') ||
-      (request.username ? `@${request.username}` : String(request.userId));
-    return [Markup.button.callback(
-      `✅ ${name.slice(0, 48)}`,
-      `join_request:approve:${chatId}:${request.userId}:${page}`
-    )];
-  });
-  const navigation = [];
-  if (page > 0) navigation.push(Markup.button.callback('⬅️', `join_chat:requests:${chatId}:${page - 1}`));
-  if ((page + 1) * pageSize < total) navigation.push(Markup.button.callback('➡️', `join_chat:requests:${chatId}:${page + 1}`));
-  if (navigation.length) rows.push(navigation);
-  rows.push([Markup.button.callback('⬅️ Chat boshqaruvi', `join_chat:open:${chatId}`)]);
+  const rows = [
+    [Markup.button.callback('✅ Barchasini qabul qilish', `join_chat:approve_all:${chatId}`)],
+    [Markup.button.callback('⬅️ Chat boshqaruvi', `join_chat:open:${chatId}`)]
+  ];
   return ctx.reply(
-    `Kutilayotgan so\'rovlar: ${total}\nQabul qilish uchun foydalanuvchi tugmasini bosing (sahifa ${page + 1}).`,
+    `Kutilayotgan so\'rovlar jami: ${total}`,
     Markup.inlineKeyboard(rows)
   );
 }
