@@ -288,9 +288,17 @@ function welcomeMessage(ctx) {
 }
 
 function welcomeMarkup(ctx) {
+  const rows = [];
+  if (isOwner(ctx)) {
+    rows.push([
+      { text: '➕ Kanal qo\'shish', callback_data: 'welcome:required_add', style: 'primary' },
+      { text: '📋 Kanallar ro\'yxati', callback_data: 'welcome:required_list', style: 'success' }
+    ]);
+  }
   const bottomRow = [{ text: '❓ Yordam', callback_data: 'help', style: 'success' }];
   if (isAdmin(ctx)) bottomRow.push({ text: '🛠 Admin panel', callback_data: 'admin:panel', style: 'success' });
-  return Markup.inlineKeyboard([bottomRow]).reply_markup;
+  rows.push(bottomRow);
+  return Markup.inlineKeyboard(rows).reply_markup;
 }
 
 function subscriptionKeyboard(channels) {
@@ -1492,7 +1500,7 @@ bot.action('admin:exit', async (ctx) => {
   } catch (error) {
     console.warn('Admin panel close failed:', error.response?.description || error.message);
   }
-  return ctx.reply('Admin paneldan chiqildi.', userKeyboard(ctx));
+  return ctx.reply(welcomeMessage(ctx), replyOptions(welcomeMarkup(ctx)));
 });
 
 bot.action('admin:admins', async (ctx) => {
@@ -1628,6 +1636,25 @@ bot.action('admin:subscription', async (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Ruxsat yo\'q.');
   ctx.session = { step: 'required_subscription_channel', adminPanelActive: true };
   return ctx.reply('Majburiy obuna kanalining public username sini yuboring, masalan: @my_channel');
+});
+
+bot.action('welcome:required_add', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isOwner(ctx)) return ctx.reply('Faqat asosiy admin bu amalni bajarishi mumkin.');
+  ctx.session = { step: 'required_subscription_channel', adminPanelActive: true };
+  return ctx.reply('Majburiy obuna kanalining public username sini yuboring, masalan: @my_channel');
+});
+
+bot.action('welcome:required_list', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isOwner(ctx)) return ctx.reply('Faqat asosiy admin bu amalni bajarishi mumkin.');
+  const channels = await getRequiredChannels();
+  const text = channels.length
+    ? channels.map((channel, index) => `${index + 1} - kanal: ${channel.title || channel.username}`).join('\n')
+    : 'Majburiy obuna kanallari yo\'q.';
+  return ctx.reply(text, Markup.inlineKeyboard([[
+    Markup.button.callback('➕ Kanal qo\'shish', 'welcome:required_add')
+  ]]));
 });
 
 bot.action('admin:required_list', async (ctx) => {
