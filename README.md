@@ -13,4 +13,4 @@ Each user sends `/telegram_login` to the bot, confirms, then scans the QR image 
 
 Keep the encryption key private and backed up. If it is lost or changed, stored sessions cannot be decrypted and each user must sign in again. The Telegram account connected by a user must be an administrator of the channel whose requests they want to import. The bot must also be a channel administrator with the invite-users permission to approve requests. Without the MTProto settings, the bot continues to handle new requests received after it is linked, but cannot discover older requests.
 
-In `/mychats`, choose a linked channel to view pending requests. Individual requests can be approved from the list, or use the bulk-approve button.
+In `/mychats`, choose a linked channel to view the pending-request count and approve all pending requests. Individual requesters are not shown in the bot chat.

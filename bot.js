@@ -1441,7 +1441,7 @@ async function showJoinRequestChats(ctx) {
   );
 }
 
-async function showJoinRequestQueue(ctx, chatId, page = 0) {
+async function showJoinRequestQueue(ctx, chatId) {
   const chat = await isChatAdministrator(ctx, chatId);
   if (!chat) return ctx.reply(chat === null ? 'Ulangan chat topilmadi.' : 'Bu chatni boshqarish uchun uning administratori bo\'lishingiz kerak.');
   const total = await PendingJoinRequest.countDocuments({ chatId });
@@ -1454,31 +1454,12 @@ async function showJoinRequestQueue(ctx, chatId, page = 0) {
     return ctx.reply(message, chatManagementKeyboard(chat, 0));
   }
 
-  const pageSize = 8;
-  const pageCount = Math.ceil(total / pageSize);
-  const currentPage = Math.min(Math.max(0, page), pageCount - 1);
-  const requests = await PendingJoinRequest.find({ chatId })
-    .sort({ requestedAt: 1 })
-    .skip(currentPage * pageSize)
-    .limit(pageSize)
-    .lean();
-
   const rows = [
     [Markup.button.callback('✅ Barchasini qabul qilish', `join_chat:approve_all:${chatId}`)],
-    ...requests.map((request) => {
-      const name = [request.firstName, request.lastName].filter(Boolean).join(' ') ||
-        (request.username ? `@${request.username}` : String(request.userId));
-      const label = `${name}${request.username ? ` (@${request.username})` : ''}`.slice(0, 50);
-      return [Markup.button.callback(`✅ ${label}`, `join_request:approve:${chatId}:${request.userId}:${currentPage}`)];
-    })
+    [Markup.button.callback('⬅️ Chat boshqaruvi', `join_chat:open:${chatId}`)]
   ];
-  const navigation = [];
-  if (currentPage > 0) navigation.push(Markup.button.callback('⬅️ Oldingi', `join_chat:requests:${chatId}:${currentPage - 1}`));
-  if (currentPage + 1 < pageCount) navigation.push(Markup.button.callback('Keyingi ➡️', `join_chat:requests:${chatId}:${currentPage + 1}`));
-  if (navigation.length) rows.push(navigation);
-  rows.push([Markup.button.callback('⬅️ Chat boshqaruvi', `join_chat:open:${chatId}`)]);
   return ctx.reply(
-    `Kutilayotgan so\'rovlar jami: ${total} (sahifa ${currentPage + 1}/${pageCount})`,
+    `Kutilayotgan so\'rovlar soni: ${total}`,
     Markup.inlineKeyboard(rows)
   );
 }
