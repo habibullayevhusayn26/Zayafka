@@ -380,11 +380,15 @@ function welcomeMessage(ctx) {
   return configuredMessage('welcome', ctx);
 }
 
-function welcomeMarkup(ctx) {
+async function welcomeMarkup(ctx) {
+  const accountLinked = telegramAccountManager.isConfigured() &&
+    await telegramAccountManager.isLinked(ctx.from?.id);
   const rows = [
     [{ text: '➕ Kanal/guruh ulash', callback_data: 'welcome:join_chat_connect', style: 'primary' }],
     [{ text: '📋 Ulangan kanallar ro\'yxati', callback_data: 'welcome:required_list', style: 'success' }],
-    [{ text: '🔐 Telegram akkauntini ulash', callback_data: 'account:login', style: 'primary' }]
+    [accountLinked
+      ? { text: '🔓 Telegram akkauntini uzish', callback_data: 'account:logout', style: 'danger' }
+      : { text: '🔐 Telegram akkauntini ulash', callback_data: 'account:login', style: 'primary' }]
   ];
   const bottomRow = [{ text: '❓ Yordam', callback_data: 'help', style: 'success' }];
   if (isAdmin(ctx)) bottomRow.push({ text: '🛠 Admin panel', callback_data: 'admin:panel', style: 'success' });
@@ -627,7 +631,7 @@ async function handleStart(ctx) {
     }
   }
   if (!(await requiredSubscription(ctx))) return;
-  return ctx.reply(welcomeMessage(ctx), replyOptions(welcomeMarkup(ctx) || userKeyboard(ctx).reply_markup));
+  return ctx.reply(welcomeMessage(ctx), replyOptions(await welcomeMarkup(ctx) || userKeyboard(ctx).reply_markup));
 }
 
 bot.use(async (ctx, next) => {
@@ -833,8 +837,39 @@ bot.command('cancel', async (ctx) => {
 
 bot.command('telegram_logout', async (ctx) => {
   if (ctx.chat?.type !== 'private') return ctx.reply('Bu buyruqni botning shaxsiy chatida yuboring.');
+  return sendTelegramLogoutConfirmation(ctx);
+});
+
+function sendTelegramLogoutConfirmation(ctx) {
+  return ctx.reply(
+    'Telegram akkauntingizni botdan uzmoqchimisiz? Saqlangan sessiya o‘chiriladi.',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Ha, uzish', 'account:logout:confirm')],
+      [Markup.button.callback('Bekor qilish', 'account:logout:cancel')]
+    ])
+  );
+}
+
+bot.action('account:logout', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (ctx.chat?.type !== 'private') return ctx.reply('Bu amalni botning shaxsiy chatida bajaring.');
+  return sendTelegramLogoutConfirmation(ctx);
+});
+
+bot.action('account:logout:confirm', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (ctx.chat?.type !== 'private') return ctx.reply('Bu amalni botning shaxsiy chatida bajaring.');
   await telegramAccountManager.logout(ctx.from.id);
-  return ctx.reply('Telegram akkauntingiz botdan uzildi va saqlangan sessiya o\'chirildi.');
+  const text = 'Telegram akkauntingiz botdan uzildi va saqlangan sessiya o‘chirildi.';
+  const replyMarkup = await welcomeMarkup(ctx);
+  return ctx.editMessageText(text, { reply_markup: replyMarkup });
+});
+
+bot.action('account:logout:cancel', async (ctx) => {
+  await ctx.answerCbQuery('Bekor qilindi.');
+  if (ctx.chat?.type !== 'private') return;
+  const replyMarkup = await welcomeMarkup(ctx);
+  return ctx.editMessageText('Akkauntni uzish bekor qilindi.', { reply_markup: replyMarkup });
 });
 
 bot.action('account:login', async (ctx) => {
@@ -1294,7 +1329,7 @@ bot.on('chat_join_request', async (ctx) => {
 
 bot.action('check_subscription', async (ctx) => {
   await ctx.answerCbQuery();
-  if (await requiredSubscription(ctx)) return ctx.reply(welcomeMessage(ctx), replyOptions(welcomeMarkup(ctx) || userKeyboard(ctx).reply_markup));
+  if (await requiredSubscription(ctx)) return ctx.reply(welcomeMessage(ctx), replyOptions(await welcomeMarkup(ctx) || userKeyboard(ctx).reply_markup));
 });
 
 bot.action('help', async (ctx) => {
@@ -1811,7 +1846,7 @@ bot.action('admin:exit', async (ctx) => {
   } catch (error) {
     console.warn('Admin panel close failed:', error.response?.description || error.message);
   }
-  return ctx.reply(welcomeMessage(ctx), replyOptions(welcomeMarkup(ctx)));
+  return ctx.reply(welcomeMessage(ctx), replyOptions(await welcomeMarkup(ctx)));
 });
 
 bot.action('admin:admins', async (ctx) => {
