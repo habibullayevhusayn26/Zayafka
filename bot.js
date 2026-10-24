@@ -649,11 +649,32 @@ bot.command('mychats', showJoinRequestChats);
 
 bot.command('telegram_login', async (ctx) => {
   if (ctx.chat?.type !== 'private') return ctx.reply('Telegram akkauntini botning shaxsiy chatida ulang.');
+  return sendTelegramLoginConfirmation(ctx);
+});
+
+function sendTelegramLoginConfirmation(ctx) {
+  return ctx.reply(
+    'Telegram akkauntingizni ulash uchun botga telefon raqamingiz, Telegram tasdiqlash kodi va ehtimol 2FA parolingizni kiritasiz. Sessiya shifrlanib saqlanadi, ammo bot serverini boshqaruvchi akkauntingizga kirish imkoniga ega bo\'lishi mumkin. Faqat bot egasiga ishonsangiz davom eting.',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('Davom etish', 'account:login:confirm')],
+      [Markup.button.callback('Bekor qilish', 'account:login:cancel')]
+    ])
+  );
+}
+
+bot.action('account:login:confirm', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (ctx.chat?.type !== 'private') return ctx.reply('Telegram akkauntini botning shaxsiy chatida ulang.');
   try {
     await telegramAccountManager.beginLogin(ctx.from.id);
   } catch (error) {
     return ctx.reply(error.message);
   }
+});
+
+bot.action('account:login:cancel', async (ctx) => {
+  await ctx.answerCbQuery('Bekor qilindi.');
+  return ctx.editMessageReplyMarkup({ inline_keyboard: [] });
 });
 
 bot.command('telegram_logout', async (ctx) => {
@@ -665,11 +686,7 @@ bot.command('telegram_logout', async (ctx) => {
 bot.action('account:login', async (ctx) => {
   await ctx.answerCbQuery();
   if (ctx.chat?.type !== 'private') return ctx.reply('Telegram akkauntini botning shaxsiy chatida ulang.');
-  try {
-    await telegramAccountManager.beginLogin(ctx.from.id);
-  } catch (error) {
-    return ctx.reply(error.message);
-  }
+  return sendTelegramLoginConfirmation(ctx);
 });
 
 bot.on('channel_post', handleChannelLinkCommand);

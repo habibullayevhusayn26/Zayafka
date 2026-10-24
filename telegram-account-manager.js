@@ -138,7 +138,7 @@ function createTelegramAccountManager({
       await sendMessage(flow.telegramId, '✅ Telegram akkauntingiz xavfsiz shifrlangan sessiya bilan ulandi. Endi /mychats orqali eski so\'rovlarni ko\'rishingiz mumkin.');
     } catch (error) {
       await client.disconnect();
-      const message = error.message === 'AUTH_RESTART'
+      const message = error.message === 'AUTH_USER_CANCEL'
         ? 'Login jarayoni bekor qilindi.'
         : `Telegram akkauntini ulab bo\'lmadi: ${error.message}`;
       await sendMessage(flow.telegramId, message);
@@ -173,7 +173,7 @@ function createTelegramAccountManager({
       if (!flow) return false;
       const value = String(ctx.message?.text || '').trim();
       if (value.toLowerCase() === '/cancel') {
-        flow.pendingInput?.reject(new Error('AUTH_RESTART'));
+        flow.pendingInput?.reject(new Error('AUTH_USER_CANCEL'));
         return ctx.deleteMessage().then(() => true, () => true);
       }
       if (!flow.pendingInput) return false;
@@ -195,7 +195,7 @@ function createTelegramAccountManager({
       const key = String(telegramId);
       const flow = loginFlows.get(key);
       if (flow) {
-        flow.pendingInput?.reject(new Error('AUTH_RESTART'));
+        flow.pendingInput?.reject(new Error('AUTH_USER_CANCEL'));
         if (flow.client?.connected) await flow.client.disconnect();
         loginFlows.delete(key);
       }
