@@ -333,11 +333,20 @@ function userKeyboard(ctx) {
 }
 
 const persistentSessionStore = {
+  cache: new Map(),
   async get(key) {
+    const cached = this.cache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.data;
+    this.cache.delete(key);
     const record = await Session.findOne({ key }).lean();
-    return record?.data;
+    const value = record?.data;
+    this.cache.set(key, { data: value, expiresAt: Date.now() + 30_000 });
+    if (this.cache.size > 5000) this.cache.delete(this.cache.keys().next().value);
+    return value;
   },
   async set(key, value) {
+    this.cache.set(key, { data: value, expiresAt: Date.now() + 30_000 });
+    if (this.cache.size > 5000) this.cache.delete(this.cache.keys().next().value);
     await Session.findOneAndUpdate(
       { key },
       { $set: { data: value, updatedAt: new Date() } },
@@ -345,6 +354,7 @@ const persistentSessionStore = {
     );
   },
   async delete(key) {
+    this.cache.delete(key);
     await Session.deleteOne({ key });
   }
 };
@@ -391,8 +401,7 @@ function subscriptionKeyboard(channels) {
 }
 
 async function getRequiredChannels() {
-  const configDocument = await BotConfig.findOne({ configKey: 'main_config' }, { channels: 1 }).lean();
-  return configDocument?.channels || data.settings.requiredChannels || [];
+  return data.settings.requiredChannels || [];
 }
 
 async function requiredSubscription(ctx) {
@@ -400,16 +409,16 @@ async function requiredSubscription(ctx) {
   const channels = await getRequiredChannels();
   if (!channels.length) return true;
 
-  const notSubscribed = [];
-  for (const channel of channels) {
+  const subscriptionResults = await Promise.all(channels.map(async (channel) => {
     try {
       const member = await ctx.telegram.getChatMember(channel.id, ctx.from.id);
-      if (!['creator', 'administrator', 'member'].includes(member.status)) notSubscribed.push(channel);
+      return ['creator', 'administrator', 'member'].includes(member.status) ? null : channel;
     } catch (error) {
       console.error('Subscription check failed:', error.response?.description || error.message);
-      notSubscribed.push(channel);
+      return channel;
     }
-  }
+  }));
+  const notSubscribed = subscriptionResults.filter(Boolean);
 
   if (!notSubscribed.length) return true;
   await ctx.reply(configuredMessage('subscriptionRequired', ctx), replyOptions(subscriptionKeyboard(notSubscribed).reply_markup));
@@ -462,24 +471,17 @@ async function hydrateSettings() {
 
 async function ensureUser(ctx) {
   const telegramId = Number(ctx.from.id);
-  const existingUser = await User.findOne({ telegramId }).lean();
   const userData = {
     username: ctx.from.username || '',
     nickname: ctx.from.first_name || ctx.from.last_name || '',
     lastActiveAt: new Date()
   };
-  if (existingUser) {
-    await User.updateOne({ telegramId }, { $set: userData });
-    return { user: { ...existingUser, ...userData }, isNew: false };
-  }
-  try {
-    const user = await User.create({ telegramId, ...userData });
-    return { user: user.toObject(), isNew: true };
-  } catch (error) {
-    if (error.code !== 11000) throw error;
-    await User.updateOne({ telegramId }, { $set: userData });
-    return { user: await User.findOne({ telegramId }).lean(), isNew: false };
-  }
+  const result = await User.updateOne(
+    { telegramId },
+    { $set: userData, $setOnInsert: { telegramId, joinedAt: new Date() } },
+    { upsert: true }
+  );
+  return { user: { telegramId, ...userData }, isNew: result.upsertedCount === 1 };
 }
 
 async function notifyNewSubscriber(ctx) {
@@ -628,6 +630,18 @@ async function handleStart(ctx) {
 }
 
 bot.use(async (ctx, next) => {
+  const startedAt = Date.now();
+  try {
+    await next();
+  } finally {
+    const durationMs = Date.now() - startedAt;
+    if (durationMs >= 2000) {
+      console.warn(`Slow Telegram update: ${ctx.updateType} took ${durationMs}ms.`);
+    }
+  }
+});
+
+bot.use(async (ctx, next) => {
   if (ctx.chatJoinRequest || ctx.myChatMember) return next();
   if (ctx.chat && ctx.chat.type !== 'private' && !isChatLinkCommand(getChatCommand(ctx))) return;
   return next();
@@ -648,7 +662,7 @@ bot.use(async (ctx, next) => {
   if (ctx.chatJoinRequest || ctx.myChatMember || isChatCommand) return next();
   if (/^\/(?:connect|disconnect|mychats)(?:@\w+)?(?:\s|$)/i.test(ctx.message?.text || '') ||
       /^(?:join_chat:|join_request:)/.test(ctx.callbackQuery?.data || '')) return next();
-  if (ctx.from && ctx.message?.text !== '/start') await ensureUser(ctx);
+  if (ctx.from && ctx.message && ctx.message.text !== '/start') await ensureUser(ctx);
   if (ctx.callbackQuery?.data === 'check_subscription') return next();
   if (ctx.callbackQuery?.data && isAdmin(ctx) &&
       /^(?:admin:|broadcast:)/.test(ctx.callbackQuery.data) &&
@@ -1407,15 +1421,6 @@ async function showJoinRequestChats(ctx) {
   if (!ownerChats.length) {
     return ctx.reply('Hali sizga ulangan chat yo\'q. Botni chatga administrator qiling va /connect buyrug\'ini yuboring.');
   }
-  const syncErrors = [];
-  for (const chat of ownerChats) {
-    try {
-      await syncJoinRequestArchive(ctx.from.id, chat);
-    } catch (error) {
-      syncErrors.push(chat.title || chat.username || String(chat.chatId));
-      console.error(`Could not sync pending join requests for ${chat.chatId}:`, error.message);
-    }
-  }
   const pendingCounts = await PendingJoinRequest.aggregate([
     { $match: { chatId: { $in: ownerChats.map((chat) => chat.chatId) } } },
     { $group: { _id: '$chatId', count: { $sum: 1 } } }
@@ -1430,29 +1435,22 @@ async function showJoinRequestChats(ctx) {
       `join_chat:open:${chat.chatId}`
     )];
   });
-  const warning = syncErrors.length
-    ? `\n\n⚠️ Ayrim chatlarning eski so\'rovlarini yangilab bo\'lmadi: ${syncErrors.join(', ')}`
-    : '';
-  return ctx.reply(`Boshqarish uchun kanal yoki guruhni tanlang:${warning}`, Markup.inlineKeyboard(buttons));
+  return ctx.reply(
+    'Boshqarish uchun kanal yoki guruhni tanlang. Eski so\'rovlar chatni ochganda yangilanadi.',
+    Markup.inlineKeyboard(buttons)
+  );
 }
 
 async function showJoinRequestQueue(ctx, chatId, page = 0) {
   const chat = await isChatAdministrator(ctx, chatId);
   if (!chat) return ctx.reply(chat === null ? 'Ulangan chat topilmadi.' : 'Bu chatni boshqarish uchun uning administratori bo\'lishingiz kerak.');
-  let syncWarning = '';
-  try {
-    await syncJoinRequestArchive(ctx.from.id, chat);
-  } catch (error) {
-    syncWarning = '\n\n⚠️ Eski so\'rovlarni yangilab bo\'lmadi. Avvaldan saqlangan so\'rovlar ko\'rsatilmoqda.';
-    console.error(`Could not sync pending join requests for ${chatId}:`, error.message);
-  }
   const total = await PendingJoinRequest.countDocuments({ chatId });
   if (!total) {
     const message = !telegramAccountManager.isConfigured()
-      ? `Saqlangan kutilayotgan so\'rovlar yo\'q.${syncWarning}\n\nBot egasi Telegram API va sessiya shifrlash sozlamalarini kiritishi kerak.`
+      ? 'Saqlangan kutilayotgan so\'rovlar yo\'q.\n\nBot egasi Telegram API va sessiya shifrlash sozlamalarini kiritishi kerak.'
       : await telegramAccountManager.isLinked(ctx.from.id)
-        ? `Kutilayotgan qo\'shilish so\'rovlari yo\'q.${syncWarning}`
-        : `Saqlangan kutilayotgan so\'rovlar yo\'q.${syncWarning}\n\nEski so\'rovlarni ko\'rish uchun avval /telegram_login orqali o\'z Telegram akkauntingizni ulang.`;
+        ? 'Kutilayotgan qo\'shilish so\'rovlari yo\'q.'
+        : 'Saqlangan kutilayotgan so\'rovlar yo\'q.\n\nEski so\'rovlarni ko\'rish uchun avval /telegram_login orqali o\'z Telegram akkauntingizni ulang.';
     return ctx.reply(message, chatManagementKeyboard(chat, 0));
   }
 
@@ -1480,7 +1478,7 @@ async function showJoinRequestQueue(ctx, chatId, page = 0) {
   if (navigation.length) rows.push(navigation);
   rows.push([Markup.button.callback('⬅️ Chat boshqaruvi', `join_chat:open:${chatId}`)]);
   return ctx.reply(
-    `Kutilayotgan so\'rovlar jami: ${total} (sahifa ${currentPage + 1}/${pageCount})${syncWarning}`,
+    `Kutilayotgan so\'rovlar jami: ${total} (sahifa ${currentPage + 1}/${pageCount})`,
     Markup.inlineKeyboard(rows)
   );
 }
@@ -1489,18 +1487,23 @@ async function syncJoinRequestArchive(telegramId, chat) {
   const requests = await telegramAccountManager.getPendingRequests(telegramId, chat);
   if (!requests) return;
   const userIds = requests.map((request) => request.userId);
-  for (const request of requests) {
-    await PendingJoinRequest.findOneAndUpdate(
-      { chatId: chat.chatId, userId: request.userId },
-      { $set: {
-        username: request.username,
-        firstName: request.firstName,
-        lastName: request.lastName,
-        requestedAt: request.requestedAt,
-        receivedAt: new Date()
-      } },
-      { upsert: true, setDefaultsOnInsert: true }
-    );
+  if (requests.length) {
+    const receivedAt = new Date();
+    await PendingJoinRequest.bulkWrite(requests.map((request) => ({
+      updateOne: {
+        filter: { chatId: chat.chatId, userId: request.userId },
+        update: {
+          $set: {
+            username: request.username,
+            firstName: request.firstName,
+            lastName: request.lastName,
+            requestedAt: request.requestedAt,
+            receivedAt
+          }
+        },
+        upsert: true
+      }
+    })), { ordered: false });
   }
   if (requests.length < 5000) {
     await PendingJoinRequest.deleteMany({ chatId: chat.chatId, userId: { $nin: userIds } });

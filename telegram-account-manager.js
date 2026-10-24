@@ -7,6 +7,57 @@ const { StringSession } = require('teleproto/sessions');
 const MAX_REQUESTS = 5000;
 const PAGE_SIZE = 100;
 
+async function fetchAllPendingRequestPages({
+  fetchPage,
+  getInputUser,
+  emptyOffsetUser,
+  maxRequests = MAX_REQUESTS,
+  pageSize = PAGE_SIZE
+}) {
+  let offsetDate = 0;
+  let offsetUser = emptyOffsetUser;
+  const seenCursors = new Set();
+  const requests = [];
+  const seenUserIds = new Set();
+
+  while (requests.length < maxRequests) {
+    const result = await fetchPage({
+      offsetDate,
+      offsetUser,
+      limit: Math.min(pageSize, maxRequests - requests.length)
+    });
+    if (!result.importers.length) break;
+
+    const usersById = new Map((result.users || []).map((user) => [String(user.id), user]));
+    for (const request of result.importers) {
+      const userId = String(request.userId);
+      if (seenUserIds.has(userId)) continue;
+      seenUserIds.add(userId);
+      const user = usersById.get(userId);
+      requests.push({
+        userId: Number(userId),
+        username: user?.username || '',
+        firstName: user?.firstName || '',
+        lastName: user?.lastName || '',
+        requestedAt: new Date(Number(request.date) * 1000)
+      });
+    }
+    if (requests.length >= maxRequests) break;
+
+    const lastRequest = result.importers[result.importers.length - 1];
+    const lastUser = usersById.get(String(lastRequest.userId));
+    if (!lastUser) throw new Error('Telegram ro\'yxat sahifasi uchun kerakli user ma’lumotini bermadi.');
+    const cursor = `${Number(lastRequest.date)}:${String(lastRequest.userId)}`;
+    if (seenCursors.has(cursor)) {
+      throw new Error('Telegram so\'rovlar sahifalashi oldinga siljimadi; sync xavfsiz to\'xtatildi.');
+    }
+    seenCursors.add(cursor);
+    offsetDate = Number(lastRequest.date);
+    offsetUser = await getInputUser(lastUser);
+  }
+  return requests;
+}
+
 function createTelegramAccountManager({
   apiId,
   apiHash,
@@ -237,36 +288,17 @@ function createTelegramAccountManager({
       }
 
       const peer = await client.getInputEntity(entity);
-      let offsetDate = 0;
-      let offsetUser = new Api.InputUserEmpty();
-      const requests = [];
-      while (requests.length < MAX_REQUESTS) {
-        const result = await client.api.messages.getChatInviteImporters({
+      return fetchAllPendingRequestPages({
+        emptyOffsetUser: new Api.InputUserEmpty(),
+        getInputUser: (user) => client.getInputEntity(user),
+        fetchPage: ({ offsetDate, offsetUser, limit }) => client.api.messages.getChatInviteImporters({
           peer,
           requested: true,
           offsetDate,
           offsetUser,
-          limit: Math.min(PAGE_SIZE, MAX_REQUESTS - requests.length)
-        });
-        const usersById = new Map((result.users || []).map((user) => [String(user.id), user]));
-        requests.push(...result.importers.map((request) => {
-          const user = usersById.get(String(request.userId));
-          return {
-            userId: Number(request.userId),
-            username: user?.username || '',
-            firstName: user?.firstName || '',
-            lastName: user?.lastName || '',
-            requestedAt: new Date(Number(request.date) * 1000)
-          };
-        }));
-        if (result.importers.length < PAGE_SIZE || requests.length >= MAX_REQUESTS) break;
-        const lastRequest = result.importers[result.importers.length - 1];
-        const lastUser = usersById.get(String(lastRequest.userId));
-        if (!lastUser) throw new Error('Telegram ro\'yxat sahifasi uchun kerakli user ma’lumotini bermadi.');
-        offsetDate = Number(lastRequest.date);
-        offsetUser = await client.getInputEntity(lastUser);
-      }
-      return requests;
+          limit
+        })
+      });
     },
 
     async disconnect() {
@@ -278,4 +310,4 @@ function createTelegramAccountManager({
   };
 }
 
-module.exports = { createTelegramAccountManager };
+module.exports = { createTelegramAccountManager, fetchAllPendingRequestPages };
