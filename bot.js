@@ -881,27 +881,36 @@ bot.action('join_chat:list', async (ctx) => {
 bot.action(/^join_chat:open:(-?\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   const chatId = Number(ctx.match[1]);
-  const chat = await isChatAdministrator(ctx, chatId);
-  if (!chat) return ctx.reply(chat === null ? 'Ulangan chat topilmadi.' : 'Bu chatni boshqarish uchun uning administratori bo\'lishingiz kerak.');
-  const pendingCount = await PendingJoinRequest.countDocuments({ chatId });
+  const statusMessage = await ctx.reply('Chat tekshirilmoqda...');
+  const updateStatus = async (text, replyMarkup) => bot.telegram.editMessageText(
+    statusMessage.chat.id,
+    statusMessage.message_id,
+    undefined,
+    text,
+    replyMarkup ? { reply_markup: replyMarkup } : {}
+  );
+  const [chat, pendingCount, accountLinked] = await Promise.all([
+    isChatAdministrator(ctx, chatId),
+    PendingJoinRequest.countDocuments({ chatId }),
+    telegramAccountManager.isConfigured() && telegramAccountManager.isLinked(ctx.from.id)
+  ]);
+  if (!chat) {
+    await updateStatus(
+      chat === null
+        ? 'Ulangan chat topilmadi.'
+        : 'Bu chatni boshqarish uchun uning administratori bo\'lishingiz kerak.'
+    );
+    return;
+  }
   const syncKey = `${ctx.from.id}:${chatId}`;
-  const accountLinked = telegramAccountManager.isConfigured() &&
-    await telegramAccountManager.isLinked(ctx.from.id);
   const startSync = accountLinked && !pendingArchiveSyncs.has(syncKey);
   if (startSync) pendingArchiveSyncs.add(syncKey);
-  const syncStatus = startSync
+  const syncStatus = accountLinked
     ? '\n⏳ Eski so\'rovlar fonda yangilanmoqda...'
     : '';
-  let sent;
-  try {
-    sent = await ctx.reply(
-      `${chat.title || chat.username || chat.chatId}\nHolat: ${chat.paused ? '⏸ To\'xtatilgan' : '▶️ Avtomatik qabul yoqilgan'}${syncStatus}`,
-      chatManagementKeyboard(chat, pendingCount)
-    );
-  } catch (error) {
-    if (startSync) pendingArchiveSyncs.delete(syncKey);
-    throw error;
-  }
+  const status = `${chat.title || chat.username || chat.chatId}\nHolat: ${chat.paused ? '⏸ To\'xtatilgan' : '▶️ Avtomatik qabul yoqilgan'}${syncStatus}`;
+  await updateStatus(status, chatManagementKeyboard(chat, pendingCount).reply_markup);
+  const sent = statusMessage;
   if (!startSync) return sent;
 
   const telegramId = ctx.from.id;
@@ -921,13 +930,7 @@ bot.action(/^join_chat:open:(-?\d+)$/, async (ctx) => {
       const updatedCount = await PendingJoinRequest.countDocuments({ chatId });
       const status = `${chatTitle}\nHolat: ${chat.paused ? '⏸ To\'xtatilgan' : '▶️ Avtomatik qabul yoqilgan'}${warning}`;
       const replyMarkup = chatManagementKeyboard(chat, updatedCount).reply_markup;
-      await bot.telegram.editMessageText(
-        sent.chat.id,
-        sent.message_id,
-        undefined,
-        status,
-        { reply_markup: replyMarkup }
-      );
+      await bot.telegram.editMessageText(sent.chat.id, sent.message_id, undefined, status, { reply_markup: replyMarkup });
     } catch (error) {
       console.error(`Could not update join-request count for ${chatId}:`, error.response?.description || error.message);
     }

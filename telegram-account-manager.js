@@ -272,8 +272,16 @@ function createTelegramAccountManager({
       const client = await connectSavedClient(telegramId);
       if (!client) return null;
       let entity;
+      let peer;
       if (chat.username) {
         entity = await client.getEntity(chat.username.replace(/^@/, ''));
+        peer = await client.getInputEntity(entity);
+      } else if (chat.type === 'group') {
+        const groupId = Math.abs(Number(chat.chatId));
+        if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+          throw new Error('MTProto akkaunti guruh ID sini aniqlay olmadi.');
+        }
+        peer = new Api.InputPeerChat({ chatId: groupId });
       } else {
         const chatId = String(chat.chatId);
         const channelId = chatId.startsWith('-100') ? chatId.slice(4) : '';
@@ -285,9 +293,9 @@ function createTelegramAccountManager({
         if (!entity) {
           throw new Error('Telegram akkauntingiz ushbu kanalga a’zo bo\'lishi kerak.');
         }
+        peer = await client.getInputEntity(entity);
       }
 
-      const peer = await client.getInputEntity(entity);
       return fetchAllPendingRequestPages({
         emptyOffsetUser: new Api.InputUserEmpty(),
         getInputUser: (user) => client.getInputEntity(user),
