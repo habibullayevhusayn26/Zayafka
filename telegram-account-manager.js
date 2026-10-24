@@ -84,7 +84,30 @@ function createTelegramAccountManager({
     }
   }
 
-  async function runLogin(flow, updateQrButton) {
+  function requestLoginPassword(flow, promptPassword) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        flow.passwordResolver = null;
+        flow.abortController.signal.removeEventListener('abort', onAbort);
+        callback(value);
+      };
+      const onAbort = () => finish(reject, new Error('Login bekor qilindi.'));
+      const timeout = setTimeout(
+        () => finish(reject, new Error('2FA parol kiritish vaqti tugadi. QR loginni qaytadan boshlang.')),
+        5 * 60 * 1000
+      );
+
+      flow.passwordResolver = (password) => finish(resolve, password);
+      flow.abortController.signal.addEventListener('abort', onAbort, { once: true });
+      Promise.resolve(promptPassword()).catch((error) => finish(reject, error));
+    });
+  }
+
+  async function runLogin(flow, updateQrButton, promptPassword) {
     const client = createClient('');
     flow.client = client;
     try {
@@ -104,7 +127,12 @@ function createTelegramAccountManager({
               throw new Error(`QR tasvirini Telegramga yuborib bo'lmadi: ${error.response?.description || error.message}`);
             }
           },
+          password: async (hint) => requestLoginPassword(flow, () => promptPassword(hint)),
           onError: async (error) => {
+            if (['PASSWORD_HASH_INVALID', 'PASSWORD_MISSING', 'PASSWORD_EMPTY'].includes(error.errorMessage)) {
+              await sendMessage(flow.telegramId, '2FA paroli noto‘g‘ri. Mini App orqali qaytadan kiriting.');
+              return false;
+            }
             console.error(`Telegram QR login error for ${flow.telegramId}:`, error.message);
             return true;
           }
@@ -131,8 +159,11 @@ function createTelegramAccountManager({
       return loginFlows.has(String(telegramId));
     },
 
-    async beginLogin(telegramId, updateQrButton) {
+    async beginLogin(telegramId, updateQrButton, promptPassword) {
       requireConfiguration();
+      if (typeof promptPassword !== 'function') {
+        throw new Error('2FA parol Mini App so‘rovi sozlanmagan.');
+      }
       if (loginFlows.has(String(telegramId))) {
         throw new Error('Telegram QR login jarayoni allaqachon ochiq. Bekor qilish uchun /cancel yuboring.');
       }
@@ -141,15 +172,25 @@ function createTelegramAccountManager({
       }
       const flow = { telegramId, client: null, abortController: new AbortController() };
       loginFlows.set(String(telegramId), flow);
-      void runLogin(flow, updateQrButton).catch((error) => {
+      void runLogin(flow, updateQrButton, promptPassword).catch((error) => {
         console.error(`Telegram login flow failed for ${telegramId}:`, error.message);
       });
+    },
+
+    submitLoginPassword(telegramId, password) {
+      const flow = loginFlows.get(String(telegramId));
+      if (!flow?.passwordResolver || typeof password !== 'string' || !password.length || password.length > 128) {
+        return false;
+      }
+      flow.passwordResolver(password);
+      return true;
     },
 
     cancelLogin(telegramId) {
       const flow = loginFlows.get(String(telegramId));
       if (!flow) return false;
       flow.abortController.abort();
+      flow.passwordResolver?.('');
       return true;
     },
 

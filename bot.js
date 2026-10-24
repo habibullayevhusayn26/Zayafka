@@ -5,9 +5,11 @@ process.env.TZ = config.timezone;
 const mongoose = require('mongoose');
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
 const QRCode = require('qrcode');
 const { Telegraf, Markup, session } = require('telegraf');
 const { createTelegramAccountManager } = require('./telegram-account-manager');
+const { verifyTelegramWebAppInitData } = require('./telegram-webapp-auth');
 
 const mongoConnection = mongoose.connection;
 
@@ -133,8 +135,23 @@ const port = Number(process.env.PORT) || 3000;
 const externalUrl = process.env.RENDER_EXTERNAL_URL ||
   process.env.PUBLIC_URL ||
   (process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : '');
-const loginQrOrigin = externalUrl ? new URL(externalUrl).origin : '';
+const externalOrigin = externalUrl ? new URL(externalUrl) : null;
+const loginQrOrigin = externalOrigin?.protocol === 'https:' ? externalOrigin.origin : '';
 app.get('/', (req, res) => res.send('Movie bot ishlamoqda...'));
+app.get('/telegram-2fa', (req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  return res.sendFile(path.join(__dirname, 'telegram-2fa.html'));
+});
+app.post('/telegram-2fa/submit', express.json({ limit: '4kb' }), async (req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  const { initData, password } = req.body || {};
+  const telegramId = verifyTelegramWebAppInitData(initData, config.botToken);
+  if (!telegramId) return res.status(401).json({ error: 'Telegram tasdig‘i yaroqsiz yoki muddati tugagan.' });
+  if (!telegramAccountManager.submitLoginPassword(telegramId, password)) {
+    return res.status(409).json({ error: 'Faol 2FA login so‘rovi topilmadi. QR loginni qaytadan boshlang.' });
+  }
+  return res.status(200).json({ ok: true });
+});
 app.get('/health', (req, res) => res.status(200).json({
   ok: true,
   mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
@@ -765,7 +782,23 @@ bot.action('account:login:confirm', async (ctx) => {
       }
       console.info(`Telegram login QR image refreshed for user ${ctx.from.id}.`);
     };
-    await telegramAccountManager.beginLogin(ctx.from.id, updateQrImage);
+    await telegramAccountManager.beginLogin(ctx.from.id, updateQrImage, async (hint) => {
+      if (!loginQrOrigin) {
+        throw new Error('Telegram Mini App uchun Render public URL sozlanmagan.');
+      }
+      const hintText = hint ? `\nTelegram parol eslatmasi: ${hint}` : '';
+      await bot.telegram.sendMessage(
+        ctx.from.id,
+        `Akkauntingizda 2FA yoqilgan. Parolni faqat o‘zingizning Telegram Mini App oynasida kiriting.${hintText}\nParol saqlanmaydi va login tugagach xotiradan chiqariladi.`,
+        {
+          protect_content: true,
+          reply_markup: Markup.inlineKeyboard([
+            [Markup.button.webApp('2FA parolini kiritish', `${loginQrOrigin}/telegram-2fa`)],
+            [Markup.button.callback('❌ Bekor qilish', 'account:login:cancel')]
+          ]).reply_markup
+        }
+      );
+    });
   } catch (error) {
     return ctx.reply(error.message);
   }

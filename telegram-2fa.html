@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Telegram 2FA</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body { font: 16px system-ui, sans-serif; margin: 0; padding: 24px; background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #111); }
+    main { max-width: 420px; margin: 12vh auto 0; }
+    input, button { box-sizing: border-box; width: 100%; min-height: 48px; border-radius: 10px; font: inherit; }
+    input { padding: 0 12px; border: 1px solid var(--tg-theme-hint-color, #999); color: inherit; background: var(--tg-theme-secondary-bg-color, #f3f3f3); }
+    button { margin-top: 12px; border: 0; color: var(--tg-theme-button-text-color, #fff); background: var(--tg-theme-button-color, #2481cc); }
+    #status { min-height: 24px; color: var(--tg-theme-hint-color, #666); }
+  </style>
+</head>
+<body>
+  <main>
+    <h2>Telegram 2FA paroli</h2>
+    <p>Parolni faqat ishonchli bot serveriga kiriting. Parol saqlanmaydi.</p>
+    <form id="password-form">
+      <input id="password" name="twofa-password" type="password" autocomplete="off" maxlength="128" required placeholder="2FA paroli">
+      <button id="submit" type="submit">Ulashni davom ettirish</button>
+    </form>
+    <p id="status" role="status"></p>
+  </main>
+  <script>
+    const webApp = window.Telegram?.WebApp;
+    const form = document.getElementById('password-form');
+    const passwordInput = document.getElementById('password');
+    const submitButton = document.getElementById('submit');
+    const status = document.getElementById('status');
+    if (webApp) webApp.ready();
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!webApp?.initData) {
+        status.textContent = 'Oynani Telegram ichida oching.';
+        return;
+      }
+      const password = passwordInput.value;
+      passwordInput.value = '';
+      submitButton.disabled = true;
+      status.textContent = 'Tekshirilmoqda...';
+      try {
+        const response = await fetch('/telegram-2fa/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify({ initData: webApp.initData, password })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Паролни юбориб бўлмади.');
+        status.textContent = 'Parol qabul qilindi. Telegram chatiga qayting.';
+        webApp.close();
+      } catch (error) {
+        status.textContent = error.message;
+        submitButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
