@@ -5,7 +5,8 @@ process.env.TZ = config.timezone;
 const mongoose = require('mongoose');
 const express = require('express');
 const crypto = require('crypto');
-const { Telegraf, Markup, session } = require('telegraf');
+const QRCode = require('qrcode');
+const { Telegraf, Markup, Input, session } = require('telegraf');
 const { createTelegramAccountManager } = require('./telegram-account-manager');
 
 const mongoConnection = mongoose.connection;
@@ -668,19 +669,33 @@ bot.action('account:login:confirm', async (ctx) => {
   const messageId = ctx.callbackQuery.message?.message_id;
   if (!messageId) return ctx.reply('QR login xabarini topib bo\'lmadi. /telegram_login ni qayta yuboring.');
   try {
-    await ctx.editMessageText('Telegram QR login tayyorlanmoqda. Bu login kodi emas; Telegram ilovasi orqali tasdiqlash havolasi beriladi.');
-    const updateQrButton = async (loginUrl) => ctx.telegram.editMessageReplyMarkup(
-      ctx.chat.id,
-      messageId,
-      undefined,
-      Markup.inlineKeyboard(loginUrl
-        ? [
-          [Markup.button.url('Telegram ilovasida tasdiqlash', loginUrl)],
-          [Markup.button.callback('Bekor qilish', 'account:login:cancel')]
-        ]
-        : []).reply_markup
-    );
-    await telegramAccountManager.beginLogin(ctx.from.id, updateQrButton);
+    await ctx.editMessageText('QR login tayyorlanmoqda...');
+    let qrMessageId;
+    const updateQrImage = async (loginUrl) => {
+      const image = Input.fromBuffer(
+        await QRCode.toBuffer(loginUrl, { errorCorrectionLevel: 'M', margin: 2, width: 360 }),
+        'telegram-login-qr.png'
+      );
+      const replyMarkup = Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Bekor qilish', 'account:login:cancel')]
+      ]).reply_markup;
+      if (!qrMessageId) {
+        const sent = await ctx.telegram.sendPhoto(ctx.chat.id, image, {
+          caption: 'Telegram ilovasida Settings → Devices → Link Desktop Device ni tanlab, ushbu QR-kodni skaner qiling.',
+          reply_markup: replyMarkup
+        });
+        qrMessageId = sent.message_id;
+        return;
+      }
+      await ctx.telegram.editMessageMedia(
+        ctx.chat.id,
+        qrMessageId,
+        undefined,
+        { type: 'photo', media: image, caption: 'Yangilangan Telegram login QR-kodi. Telegram ilovasida skaner qiling.' },
+        { reply_markup: replyMarkup }
+      );
+    };
+    await telegramAccountManager.beginLogin(ctx.from.id, updateQrImage);
   } catch (error) {
     return ctx.reply(error.message);
   }
@@ -1884,7 +1899,6 @@ bot.on('text', async (ctx) => {
   const rawText = ctx.message.text;
   const value = rawText.trim();
   const step = ctx.session?.step;
-  if (await telegramAccountManager.handleInput(ctx)) return;
   if (step === 'join_welcome_text') {
     if (value.toLowerCase() === '/cancel') {
       reset(ctx);
