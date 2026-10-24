@@ -669,7 +669,7 @@ bot.action('account:login:confirm', async (ctx) => {
   const messageId = ctx.callbackQuery.message?.message_id;
   if (!messageId) return ctx.reply('QR login xabarini topib bo\'lmadi. /telegram_login ni qayta yuboring.');
   try {
-    await ctx.editMessageText('QR login tayyorlanmoqda...');
+    await ctx.editMessageText('QR login tayyorlanmoqda. Bir necha soniya kuting...');
     let qrMessageId;
     const updateQrImage = async (loginUrl) => {
       const image = Input.fromBuffer(
@@ -685,6 +685,11 @@ bot.action('account:login:confirm', async (ctx) => {
           reply_markup: replyMarkup
         });
         qrMessageId = sent.message_id;
+        try {
+          await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+        } catch (error) {
+          console.warn('Could not remove Telegram QR placeholder message:', error.response?.description || error.message);
+        }
         return;
       }
       await ctx.telegram.editMessageMedia(

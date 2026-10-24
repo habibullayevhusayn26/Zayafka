@@ -93,9 +93,17 @@ function createTelegramAccountManager({
         { apiId: parsedApiId, apiHash },
         {
           abortSignal: flow.abortController.signal,
-          qrCode: async ({ token }) => updateQrButton(
-            `tg://login?token=${token.toString('base64url')}`
-          ),
+          qrCode: async ({ token, expires }) => {
+            const loginUrl = `tg://login?token=${Buffer.from(token).toString('base64url')}`;
+            console.info(`Telegram QR generated for user ${flow.telegramId}; expires at ${new Date(Number(expires) * 1000).toISOString()}.`);
+            try {
+              await updateQrButton(loginUrl);
+              console.info(`Telegram QR image sent for user ${flow.telegramId}.`);
+            } catch (error) {
+              console.error(`Telegram QR image delivery failed for user ${flow.telegramId}:`, error.response?.description || error.message);
+              throw new Error(`QR tasvirini Telegramga yuborib bo'lmadi: ${error.response?.description || error.message}`);
+            }
+          },
           onError: async (error) => {
             console.error(`Telegram QR login error for ${flow.telegramId}:`, error.message);
             return true;
@@ -110,6 +118,7 @@ function createTelegramAccountManager({
     } catch (error) {
       await client.disconnect();
       if (!flow.abortController.signal.aborted) {
+        console.error(`Telegram QR login failed for user ${flow.telegramId}:`, error.response?.description || error.message);
         await sendMessage(flow.telegramId, `Telegram QR orqali ulash amalga oshmadi: ${error.message}`);
       }
     } finally {
