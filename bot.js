@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 const express = require('express');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
-const { Telegraf, Markup, Input, session } = require('telegraf');
+const { Telegraf, Markup, session } = require('telegraf');
 const { createTelegramAccountManager } = require('./telegram-account-manager');
 
 const mongoConnection = mongoose.connection;
@@ -90,6 +90,12 @@ const telegramAccountSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 }, { versionKey: false });
 
+const loginQrImageSchema = new mongoose.Schema({
+  key: { type: String, unique: true, required: true },
+  image: { type: Buffer, required: true },
+  expiresAt: { type: Date, required: true, expires: 0 }
+}, { versionKey: false });
+
 const botConfigSchema = new mongoose.Schema({
   configKey: { type: String, default: 'main_config', unique: true },
   channels: { type: Array, default: [] },
@@ -106,6 +112,7 @@ const JoinRequestChat = mongoose.models.JoinRequestChat || mongoose.model('JoinR
 const PendingJoinRequest = mongoose.models.PendingJoinRequest || mongoose.model('PendingJoinRequest', pendingJoinRequestSchema);
 const JoinRequestLinkCode = mongoose.models.JoinRequestLinkCode || mongoose.model('JoinRequestLinkCode', joinRequestLinkCodeSchema);
 const TelegramAccount = mongoose.models.TelegramAccount || mongoose.model('TelegramAccount', telegramAccountSchema);
+const LoginQrImage = mongoose.models.LoginQrImage || mongoose.model('LoginQrImage', loginQrImageSchema);
 
 const telegramAccountManager = createTelegramAccountManager({
   apiId: process.env.TELEGRAM_API_ID,
@@ -123,11 +130,46 @@ const telegramAccountManager = createTelegramAccountManager({
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
+const externalUrl = process.env.RENDER_EXTERNAL_URL ||
+  process.env.PUBLIC_URL ||
+  (process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : '');
+const loginQrOrigin = externalUrl ? new URL(externalUrl).origin : '';
 app.get('/', (req, res) => res.send('Movie bot ishlamoqda...'));
 app.get('/health', (req, res) => res.status(200).json({
   ok: true,
   mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
 }));
+app.get('/telegram-login-qr/:qrId.png', async (req, res) => {
+  try {
+    const record = await LoginQrImage.findOne({
+      key: req.params.qrId,
+      expiresAt: { $gt: new Date() }
+    });
+    if (!record) return res.sendStatus(404);
+    res.set({
+      'Cache-Control': 'no-store, max-age=0',
+      'Content-Type': 'image/png',
+      'X-Content-Type-Options': 'nosniff'
+    });
+    return res.send(record.image);
+  } catch (error) {
+    console.error('Telegram QR image endpoint failed:', error.message);
+    return res.sendStatus(503);
+  }
+});
+
+async function createLoginQrUrl(image) {
+  if (!loginQrOrigin) {
+    throw new Error('Render public URL topilmadi. Render’da RENDER_EXTERNAL_URL sozlamasini tekshiring.');
+  }
+  const qrId = crypto.randomBytes(24).toString('hex');
+  await LoginQrImage.create({
+    key: qrId,
+    image,
+    expiresAt: new Date(Date.now() + 2 * 60 * 1000)
+  });
+  return `${loginQrOrigin}/telegram-login-qr/${qrId}.png`;
+}
 
 const bot = new Telegraf(config.botToken);
 const ADMIN_USERNAME = config.admin.username;
@@ -672,19 +714,31 @@ bot.action('account:login:confirm', async (ctx) => {
     await ctx.editMessageText('QR login tayyorlanmoqda. Bir necha soniya kuting...');
     let qrMessageId;
     const updateQrImage = async (loginUrl) => {
-      const image = Input.fromBuffer(
-        await QRCode.toBuffer(loginUrl, { errorCorrectionLevel: 'M', margin: 2, width: 360 }),
-        'telegram-login-qr.png'
+      const image = await QRCode.toBuffer(
+        loginUrl,
+        { errorCorrectionLevel: 'M', margin: 2, width: 360 }
       );
+      const imageUrl = await createLoginQrUrl(image);
       const replyMarkup = Markup.inlineKeyboard([
         [Markup.button.callback('❌ Bekor qilish', 'account:login:cancel')]
       ]).reply_markup;
       if (!qrMessageId) {
-        const sent = await ctx.telegram.sendPhoto(ctx.chat.id, image, {
-          caption: 'Telegram ilovasida Settings → Devices → Link Desktop Device ni tanlab, ushbu QR-kodni skaner qiling.',
-          reply_markup: replyMarkup
-        });
+        console.info(`Sending Telegram login QR by public image URL for user ${ctx.from.id}.`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        let sent;
+        try {
+          sent = await ctx.telegram.callApi('sendPhoto', {
+            chat_id: ctx.chat.id,
+            photo: imageUrl,
+            caption: 'Telegram ilovasida Settings → Devices → Link Desktop Device ni tanlab, ushbu QR-kodni skaner qiling.',
+            reply_markup: replyMarkup
+          }, { signal: controller.signal });
+        } finally {
+          clearTimeout(timeout);
+        }
         qrMessageId = sent.message_id;
+        console.info(`Telegram login QR image delivered for user ${ctx.from.id} as message ${qrMessageId}.`);
         try {
           await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
         } catch (error) {
@@ -692,13 +746,24 @@ bot.action('account:login:confirm', async (ctx) => {
         }
         return;
       }
-      await ctx.telegram.editMessageMedia(
-        ctx.chat.id,
-        qrMessageId,
-        undefined,
-        { type: 'photo', media: image, caption: 'Yangilangan Telegram login QR-kodi. Telegram ilovasida skaner qiling.' },
-        { reply_markup: replyMarkup }
-      );
+      console.info(`Refreshing Telegram login QR image for user ${ctx.from.id}.`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      try {
+        await ctx.telegram.callApi('editMessageMedia', {
+          chat_id: ctx.chat.id,
+          message_id: qrMessageId,
+          media: {
+            type: 'photo',
+            media: imageUrl,
+            caption: 'Yangilangan Telegram login QR-kodi. Telegram ilovasida skaner qiling.'
+          },
+          reply_markup: replyMarkup
+        }, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
+      console.info(`Telegram login QR image refreshed for user ${ctx.from.id}.`);
     };
     await telegramAccountManager.beginLogin(ctx.from.id, updateQrImage);
   } catch (error) {

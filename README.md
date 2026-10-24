@@ -9,7 +9,7 @@ Telegram bot for managing channel and group join requests. Every user can connec
 3. Generate a random 32-byte encryption key, for example with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`, and set it as `TELEGRAM_SESSION_ENCRYPTION_KEY`.
 4. Run `npm start`.
 
-Each user sends `/telegram_login` to the bot, confirms, then scans the QR image using Telegram's **Settings → Devices → Link Desktop Device** flow. No login code or password is sent to the bot. The authorized session is encrypted in MongoDB. Users can remove that session with `/telegram_logout`; `/cancel` stops an active login.
+Each user sends `/telegram_login` to the bot, confirms, then scans the QR image using Telegram's **Settings → Devices → Link Desktop Device** flow. On Render, the bot serves the short-lived QR image from its `RENDER_EXTERNAL_URL` and stores it in MongoDB so Telegram can fetch it without the bot uploading a multipart image, even when requests reach different service instances. No login code or password is sent to the bot. The authorized session is encrypted in MongoDB. Users can remove that session with `/telegram_logout`; `/cancel` stops an active login.
 
 Keep the encryption key private and backed up. If it is lost or changed, stored sessions cannot be decrypted and each user must sign in again. The Telegram account connected by a user must be an administrator of the channel whose requests they want to import. The bot must also be a channel administrator with the invite-users permission to approve requests. Without the MTProto settings, the bot continues to handle new requests received after it is linked, but cannot discover older requests.
 
