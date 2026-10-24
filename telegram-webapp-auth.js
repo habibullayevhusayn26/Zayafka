@@ -27,7 +27,6 @@ function verifyTelegramWebAppInitData(initData, botToken) {
   if (!Number.isSafeInteger(telegramId) || telegramId <= 0) return null;
 
   params.delete('hash');
-  params.delete('signature');
   const dataCheckString = [...params.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${value}`)

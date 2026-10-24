@@ -7,10 +7,15 @@ const { verifyTelegramWebAppInitData } = require('./telegram-webapp-auth');
 
 const botToken = '123456:example-token';
 
-function makeInitData({ authDate = Math.floor(Date.now() / 1000), user = { id: 12345 } } = {}) {
+function makeInitData({
+  authDate = Math.floor(Date.now() / 1000),
+  user = { id: 12345 },
+  signature = 'telegram-ed25519-signature'
+} = {}) {
   const values = new URLSearchParams({
     auth_date: String(authDate),
     query_id: 'test-query',
+    signature,
     user: JSON.stringify(user)
   });
   const dataCheckString = [...values.entries()]
