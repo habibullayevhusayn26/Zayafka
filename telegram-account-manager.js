@@ -148,7 +148,7 @@ function createTelegramAccountManager({
       };
       const onAbort = () => finish(reject, new Error('Login bekor qilindi.'));
       const timeout = setTimeout(
-        () => finish(reject, new Error('2FA parol kiritish vaqti tugadi. QR loginni qaytadan boshlang.')),
+        () => finish(reject, new Error('2FA parol kiritish vaqti tugadi. Loginni qaytadan boshlang.')),
         5 * 60 * 1000
       );
 
@@ -158,7 +158,7 @@ function createTelegramAccountManager({
     });
   }
 
-  async function runLogin(flow, updateQrButton, promptPassword) {
+  async function runLogin(flow, updateLoginButton, promptPassword) {
     const client = createClient('');
     flow.client = client;
     try {
@@ -171,11 +171,11 @@ function createTelegramAccountManager({
             const loginUrl = `tg://login?token=${Buffer.from(token).toString('base64url')}`;
             console.info(`Telegram QR generated for user ${flow.telegramId}; expires at ${new Date(Number(expires) * 1000).toISOString()}.`);
             try {
-              await updateQrButton(loginUrl);
-              console.info(`Telegram QR image sent for user ${flow.telegramId}.`);
+              await updateLoginButton(loginUrl);
+              console.info(`Telegram login button updated for user ${flow.telegramId}.`);
             } catch (error) {
-              console.error(`Telegram QR image delivery failed for user ${flow.telegramId}:`, error.response?.description || error.message);
-              throw new Error(`QR tasvirini Telegramga yuborib bo'lmadi: ${error.response?.description || error.message}`);
+              console.error(`Telegram login button update failed for user ${flow.telegramId}:`, error.response?.description || error.message);
+              throw new Error(`Telegram tasdiqlash tugmasini yuborib bo'lmadi: ${error.response?.description || error.message}`);
             }
           },
           password: async (hint) => requestLoginPassword(flow, () => promptPassword(hint)),
@@ -189,7 +189,7 @@ function createTelegramAccountManager({
           }
         }
       );
-      if (!account || account.bot) throw new Error('QR login oddiy Telegram foydalanuvchi akkaunti bilan yakunlanmadi.');
+      if (!account || account.bot) throw new Error('Login oddiy Telegram foydalanuvchi akkaunti bilan yakunlanmadi.');
       if (flow.abortController.signal.aborted) throw new Error('Login bekor qilindi.');
       await saveSession(flow.telegramId, encryptSession(client.session.save()));
       clients.set(String(flow.telegramId), client);
@@ -197,8 +197,8 @@ function createTelegramAccountManager({
     } catch (error) {
       await client.disconnect();
       if (!flow.abortController.signal.aborted) {
-        console.error(`Telegram QR login failed for user ${flow.telegramId}:`, error.response?.description || error.message);
-        await sendMessage(flow.telegramId, `Telegram QR orqali ulash amalga oshmadi: ${error.message}`);
+        console.error(`Telegram login failed for user ${flow.telegramId}:`, error.response?.description || error.message);
+        await sendMessage(flow.telegramId, `Telegram orqali ulash amalga oshmadi: ${error.message}`);
       }
     } finally {
       loginFlows.delete(String(flow.telegramId));
@@ -210,20 +210,20 @@ function createTelegramAccountManager({
       return loginFlows.has(String(telegramId));
     },
 
-    async beginLogin(telegramId, updateQrButton, promptPassword) {
+    async beginLogin(telegramId, updateLoginButton, promptPassword) {
       requireConfiguration();
       if (typeof promptPassword !== 'function') {
         throw new Error('2FA parol Mini App so‘rovi sozlanmagan.');
       }
       if (loginFlows.has(String(telegramId))) {
-        throw new Error('Telegram QR login jarayoni allaqachon ochiq. Bekor qilish uchun /cancel yuboring.');
+        throw new Error('Telegram login jarayoni allaqachon ochiq. Bekor qilish uchun /cancel yuboring.');
       }
       if (await loadSession(telegramId)) {
         throw new Error('Telegram akkauntingiz allaqachon ulangan. Qayta ulashdan oldin /telegram_logout yuboring.');
       }
       const flow = { telegramId, client: null, abortController: new AbortController() };
       loginFlows.set(String(telegramId), flow);
-      void runLogin(flow, updateQrButton, promptPassword).catch((error) => {
+      void runLogin(flow, updateLoginButton, promptPassword).catch((error) => {
         console.error(`Telegram login flow failed for ${telegramId}:`, error.message);
       });
     },
