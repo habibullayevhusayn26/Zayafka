@@ -4,7 +4,6 @@ const crypto = require('node:crypto');
 const { Api, TelegramClient } = require('teleproto');
 const { StringSession } = require('teleproto/sessions');
 
-const INPUT_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_REQUESTS = 5000;
 const PAGE_SIZE = 100;
 
@@ -85,63 +84,34 @@ function createTelegramAccountManager({
     }
   }
 
-  function promptForInput(flow, message) {
-    return new Promise((resolve, reject) => {
-      if (flow.pendingInput) {
-        reject(new Error('Telegram login kutilmagan holatga tushdi.'));
-        return;
-      }
-      const timer = setTimeout(() => {
-        flow.pendingInput = null;
-        reject(new Error('Login muddati tugadi. Qaytadan /telegram_login yuboring.'));
-      }, INPUT_TIMEOUT_MS);
-      flow.pendingInput = {
-        resolve: (value) => {
-          clearTimeout(timer);
-          flow.pendingInput = null;
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          flow.pendingInput = null;
-          reject(error);
-        }
-      };
-      sendMessage(flow.telegramId, message).catch((error) => {
-        flow.pendingInput?.reject(error);
-      });
-    });
-  }
-
-  async function runLogin(flow) {
+  async function runLogin(flow, updateQrButton) {
     const client = createClient('');
     flow.client = client;
     try {
-      await client.start({
-        phoneNumber: () => promptForInput(flow, `Telegram telefon raqamingizni xalqaro formatda yuboring (masalan, +998...). Loginni bekor qilish uchun /cancel yuboring.`),
-        phoneCode: (_isCodeViaApp, info) => promptForInput(
-          flow,
-          `Telegram tasdiqlash kodini yuboring (${info?.type || 'Telegram ilovasi'} orqali kelgan). Kodni hech kimga bermang. Bekor qilish: /cancel.`
-        ),
-        password: () => promptForInput(flow, 'Telegram 2 bosqichli himoya parolini yuboring. U saqlanmaydi. Bekor qilish: /cancel.'),
-        emailAddress: () => promptForInput(flow, 'Telegram login email manzilingizni yuboring. Bekor qilish: /cancel.'),
-        emailVerification: async () => ({
-          type: 'code',
-          code: await promptForInput(flow, 'Emailga kelgan Telegram tasdiqlash kodini yuboring. Bekor qilish: /cancel.')
-        }),
-        onError: (error) => console.error(`Telegram login error for ${flow.telegramId}:`, error.message)
-      });
-      const account = await client.getMe();
-      if (account.bot) throw new Error('Bot akkaunt emas, oddiy Telegram foydalanuvchi akkauntini ulang.');
+      await client.connect();
+      const account = await client.signInUserWithQrCode(
+        { apiId: parsedApiId, apiHash },
+        {
+          abortSignal: flow.abortController.signal,
+          qrCode: async ({ token }) => updateQrButton(
+            `tg://login?token=${token.toString('base64url')}`
+          ),
+          onError: async (error) => {
+            console.error(`Telegram QR login error for ${flow.telegramId}:`, error.message);
+            return true;
+          }
+        }
+      );
+      if (!account || account.bot) throw new Error('QR login oddiy Telegram foydalanuvchi akkaunti bilan yakunlanmadi.');
+      if (flow.abortController.signal.aborted) throw new Error('Login bekor qilindi.');
       await saveSession(flow.telegramId, encryptSession(client.session.save()));
       clients.set(String(flow.telegramId), client);
-      await sendMessage(flow.telegramId, '✅ Telegram akkauntingiz xavfsiz shifrlangan sessiya bilan ulandi. Endi /mychats orqali eski so\'rovlarni ko\'rishingiz mumkin.');
+      await sendMessage(flow.telegramId, '✅ Telegram akkauntingiz ulandi. Endi /mychats orqali eski so\'rovlarni ko\'rishingiz mumkin.');
     } catch (error) {
       await client.disconnect();
-      const message = error.message === 'AUTH_USER_CANCEL'
-        ? 'Login jarayoni bekor qilindi.'
-        : `Telegram akkauntini ulab bo\'lmadi: ${error.message}`;
-      await sendMessage(flow.telegramId, message);
+      if (!flow.abortController.signal.aborted) {
+        await sendMessage(flow.telegramId, `Telegram QR orqali ulash amalga oshmadi: ${error.message}`);
+      }
     } finally {
       loginFlows.delete(String(flow.telegramId));
     }
@@ -152,42 +122,25 @@ function createTelegramAccountManager({
       return loginFlows.has(String(telegramId));
     },
 
-    async beginLogin(telegramId) {
+    async beginLogin(telegramId, updateQrButton) {
       requireConfiguration();
       if (loginFlows.has(String(telegramId))) {
-        throw new Error('Telegram login jarayoni allaqachon ochiq. Bekor qilish uchun /cancel yuboring.');
+        throw new Error('Telegram QR login jarayoni allaqachon ochiq. Bekor qilish uchun /cancel yuboring.');
       }
       if (await loadSession(telegramId)) {
         throw new Error('Telegram akkauntingiz allaqachon ulangan. Qayta ulashdan oldin /telegram_logout yuboring.');
       }
-      const flow = { telegramId, pendingInput: null, client: null };
+      const flow = { telegramId, client: null, abortController: new AbortController() };
       loginFlows.set(String(telegramId), flow);
-      void runLogin(flow).catch((error) => {
+      void runLogin(flow, updateQrButton).catch((error) => {
         console.error(`Telegram login flow failed for ${telegramId}:`, error.message);
       });
     },
 
-    async handleInput(ctx) {
-      if (ctx.chat?.type !== 'private' || !ctx.from?.id) return false;
-      const flow = loginFlows.get(String(ctx.from.id));
+    cancelLogin(telegramId) {
+      const flow = loginFlows.get(String(telegramId));
       if (!flow) return false;
-      const value = String(ctx.message?.text || '').trim();
-      if (value.toLowerCase() === '/cancel') {
-        flow.pendingInput?.reject(new Error('AUTH_USER_CANCEL'));
-        return ctx.deleteMessage().then(() => true, () => true);
-      }
-      if (!flow.pendingInput) return false;
-      if (!value || value.length > 512) {
-        await ctx.reply('Qiymat yaroqsiz. Qayta yuboring yoki /cancel bosing.');
-        return true;
-      }
-      const pendingInput = flow.pendingInput;
-      pendingInput.resolve(value);
-      try {
-        await ctx.deleteMessage();
-      } catch (error) {
-        console.warn(`Could not delete Telegram login input for ${ctx.from.id}:`, error.response?.description || error.message);
-      }
+      flow.abortController.abort();
       return true;
     },
 
@@ -195,7 +148,7 @@ function createTelegramAccountManager({
       const key = String(telegramId);
       const flow = loginFlows.get(key);
       if (flow) {
-        flow.pendingInput?.reject(new Error('AUTH_USER_CANCEL'));
+        flow.abortController.abort();
         if (flow.client?.connected) await flow.client.disconnect();
         loginFlows.delete(key);
       }

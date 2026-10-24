@@ -654,7 +654,7 @@ bot.command('telegram_login', async (ctx) => {
 
 function sendTelegramLoginConfirmation(ctx) {
   return ctx.reply(
-    'Telegram akkauntingizni ulash uchun botga telefon raqamingiz, Telegram tasdiqlash kodi va ehtimol 2FA parolingizni kiritasiz. Sessiya shifrlanib saqlanadi, ammo bot serverini boshqaruvchi akkauntingizga kirish imkoniga ega bo\'lishi mumkin. Faqat bot egasiga ishonsangiz davom eting.',
+    'Akkaunt login kodini botga yubormasdan QR orqali ulanadi. QR havolasini faqat o\'zingiz boshlagan Telegram login bo\'lsa oching va Telegram ilovasidagi tasdiqlash oynasini tekshiring.',
     Markup.inlineKeyboard([
       [Markup.button.callback('Davom etish', 'account:login:confirm')],
       [Markup.button.callback('Bekor qilish', 'account:login:cancel')]
@@ -665,8 +665,22 @@ function sendTelegramLoginConfirmation(ctx) {
 bot.action('account:login:confirm', async (ctx) => {
   await ctx.answerCbQuery();
   if (ctx.chat?.type !== 'private') return ctx.reply('Telegram akkauntini botning shaxsiy chatida ulang.');
+  const messageId = ctx.callbackQuery.message?.message_id;
+  if (!messageId) return ctx.reply('QR login xabarini topib bo\'lmadi. /telegram_login ni qayta yuboring.');
   try {
-    await telegramAccountManager.beginLogin(ctx.from.id);
+    await ctx.editMessageText('Telegram QR login tayyorlanmoqda. Bu login kodi emas; Telegram ilovasi orqali tasdiqlash havolasi beriladi.');
+    const updateQrButton = async (loginUrl) => ctx.telegram.editMessageReplyMarkup(
+      ctx.chat.id,
+      messageId,
+      undefined,
+      Markup.inlineKeyboard(loginUrl
+        ? [
+          [Markup.button.url('Telegram ilovasida tasdiqlash', loginUrl)],
+          [Markup.button.callback('Bekor qilish', 'account:login:cancel')]
+        ]
+        : []).reply_markup
+    );
+    await telegramAccountManager.beginLogin(ctx.from.id, updateQrButton);
   } catch (error) {
     return ctx.reply(error.message);
   }
@@ -674,7 +688,14 @@ bot.action('account:login:confirm', async (ctx) => {
 
 bot.action('account:login:cancel', async (ctx) => {
   await ctx.answerCbQuery('Bekor qilindi.');
+  telegramAccountManager.cancelLogin(ctx.from.id);
   return ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+});
+
+bot.command('cancel', async (ctx) => {
+  if (telegramAccountManager.cancelLogin(ctx.from.id)) {
+    return ctx.reply('Telegram QR login bekor qilindi.');
+  }
 });
 
 bot.command('telegram_logout', async (ctx) => {
